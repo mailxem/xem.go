@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"kori/internal/models"
@@ -184,6 +185,19 @@ func (s *Service) ApplyFeedback(ctx context.Context, eventID string, raw []byte)
 		return nil
 	}
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var account Account
+		reputationEvent := f.EventType == "Complaint" || (f.EventType == "Bounce" && f.Bounce.BounceType == "Permanent")
+		if reputationEvent {
+			var routed Message
+			if e := tx.Select("team_id").First(&routed, "id = ?", ids[0]).Error; e != nil {
+				return e
+			}
+			// Account-before-message ordering matches submission; serialize feedback
+			// counts with other events and with approval/suspension decisions.
+			if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, "team_id = ?", routed.TeamID).Error; e != nil {
+				return e
+			}
+		}
 		var m Message
 		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&m, "id = ?", ids[0]).Error; e != nil {
 			return e
@@ -214,6 +228,9 @@ func (s *Service) ApplyFeedback(ctx context.Context, eventID string, raw []byte)
 				blocked = append(blocked, r.Email)
 			}
 		}
+		if reputationEvent && len(blocked) == 0 {
+			return errors.New("feedback has no affected recipients")
+		}
 		for _, r := range blocked {
 			r = strings.ToLower(r)
 			if !recipients[r] {
@@ -233,6 +250,28 @@ func (s *Service) ApplyFeedback(ctx context.Context, eventID string, raw []byte)
 			}
 			for i := range contacts {
 				if e := tx.Model(&contacts[i]).Update("status", contactStatus).Error; e != nil {
+					return e
+				}
+			}
+		}
+		if len(blocked) > 0 && !account.Suspended {
+			action := ""
+			if f.EventType == "Complaint" {
+				action = "auto_suspend_complaint"
+			} else {
+				var hardBounces int64
+				if e := tx.Model(&Suppression{}).Where("team_id = ? AND reason = ? AND created_at >= ?", m.TeamID, "Bounce", s.Now().Add(-24*time.Hour)).Count(&hardBounces).Error; e != nil {
+					return e
+				}
+				if hardBounces >= 5 {
+					action = "auto_suspend_bounces"
+				}
+			}
+			if action != "" {
+				if e := tx.Model(&account).Update("suspended", true).Error; e != nil {
+					return e
+				}
+				if e := tx.Create(&Audit{ID: uuid.NewString(), TeamID: m.TeamID, Actor: "system:ses-feedback", Action: action, CreatedAt: s.Now()}).Error; e != nil {
 					return e
 				}
 			}
