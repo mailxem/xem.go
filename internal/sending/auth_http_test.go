@@ -62,6 +62,40 @@ func TestHTTPDomainCheckWithSessionAndNoBody(t *testing.T) {
 	}
 }
 
+func TestHTTPDomainCheckAutomaticallyApprovesAfterDNS(t *testing.T) {
+	s, domain, user, token, secret := authenticatedSending(t)
+	require.NoError(t, s.DB.Model(&Account{}).Where("team_id = ?", user.TeamID).Update("approved", false).Error)
+	require.NoError(t, s.DB.Model(&Domain{}).Where("id = ?", domain.ID).Updates(map[string]any{"provisioned": false, "ready": false}).Error)
+	p := s.Provider.(*fakeProvider)
+	p.identity.Verified, p.identity.DKIM = false, "PENDING"
+	e := echo.New()
+	s.Register(e, secret)
+	request := func(method, path string, response any) {
+		t.Helper()
+		r := httptest.NewRequest(method, path, nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		e.ServeHTTP(w, r)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), response))
+	}
+	var view DomainView
+	var status struct {
+		Account Account `json:"account"`
+	}
+	request(http.MethodPost, "/api/v1/sending/domains/"+domain.ID+"/check", &view)
+	require.True(t, view.Provisioned)
+	require.False(t, view.Ready)
+	require.Len(t, view.Records, 6)
+	request(http.MethodGet, "/api/v1/sending", &status)
+	require.False(t, status.Account.Approved)
+	p.identity.Verified, p.identity.DKIM = true, "SUCCESS"
+	request(http.MethodPost, "/api/v1/sending/domains/"+domain.ID+"/check", &view)
+	require.True(t, view.Ready)
+	request(http.MethodGet, "/api/v1/sending", &status)
+	require.True(t, status.Account.Approved)
+}
+
 func TestSessionJSONBodyValidationAndWorkspace(t *testing.T) {
 	_, _, user, token, secret := authenticatedSending(t)
 	for _, tc := range []struct {

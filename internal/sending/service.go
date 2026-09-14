@@ -25,6 +25,14 @@ import (
 	"kori/internal/models"
 )
 
+// Starter ceilings apply only to automatic approval. Operators can review and
+// raise limits separately; a DNS recheck never increases an existing allowance.
+const (
+	autoApprovalDailyLimit   int64 = 50
+	autoApprovalMonthlyLimit int64 = 200
+	autoApprovalBudgetMicros int64 = 200000
+)
+
 var ErrDenied = errors.New("sending is unavailable: check approval, pause status, domain readiness, and credential")
 var ErrLimit = errors.New("sending limit reached; review usage or contact your administrator")
 var ErrSuppressed = errors.New("recipient is suppressed or unsubscribed")
@@ -118,9 +126,14 @@ func (s *Service) RefreshDomain(ctx context.Context, team, id string) (Domain, e
 	if e := s.DB.WithContext(ctx).First(&d, "id = ? AND team_id = ?", id, team).Error; e != nil {
 		return d, e
 	}
-	// Clear readiness first: DNS errors and failed provisioning must never preserve stale eligibility.
-	if e := s.DB.WithContext(ctx).Model(&Domain{}).Where("id = ? AND team_id = ? AND token = ?", d.ID, d.TeamID, d.Token).Updates(map[string]any{"ready": false, "ownership": false}).Error; e != nil {
-		return d, e
+	// A newer check invalidates any in-flight result before it can approve an account.
+	d.CheckID = uuid.NewString()
+	r := s.DB.WithContext(ctx).Model(&Domain{}).Where("id = ? AND team_id = ? AND token = ?", d.ID, d.TeamID, d.Token).Updates(map[string]any{"ready": false, "ownership": false, "check_id": d.CheckID})
+	if r.Error != nil {
+		return d, r.Error
+	}
+	if r.RowsAffected != 1 {
+		return d, ErrDenied
 	}
 	d.Ready = false
 	d.Ownership = false
@@ -136,17 +149,19 @@ func (s *Service) RefreshDomain(ctx context.Context, team, id string) (Domain, e
 	d.CheckedAt = &now
 	if !d.Ownership {
 		d.IdentityStatus = "OWNERSHIP_REQUIRED"
-		return d, s.persistDomain(ctx, d)
+		return d, s.persistDomain(ctx, &d)
 	}
-	if !d.Provisioned {
-		a, err := s.Account(ctx, team)
-		if err != nil {
+	a, err := s.Account(ctx, team)
+	if err != nil {
+		return d, err
+	}
+	if a.Suspended {
+		if err := s.persistDomain(ctx, &d); err != nil {
 			return d, err
 		}
-		if !a.Approved || a.Suspended {
-			d.IdentityStatus = "AWAITING_APPROVAL"
-			return d, s.persistDomain(ctx, d)
-		}
+		return d, ErrDenied
+	}
+	if !d.Provisioned {
 		if e = s.Provider.Provision(ctx, team, d.Name); e != nil {
 			return d, fmt.Errorf("provider setup failed; contact the operator: %w", e)
 		}
@@ -166,7 +181,7 @@ func (s *Service) RefreshDomain(ctx context.Context, team, id string) (Domain, e
 		d.DMARCStatus = "VALID"
 	}
 	d.Ready = identity.Verified && d.DKIMStatus == "SUCCESS" && d.MAILFROMStatus == "SUCCESS" && d.DMARCStatus == "VALID"
-	e = s.persistDomain(ctx, d)
+	e = s.persistDomain(ctx, &d)
 	return d, e
 }
 func validDMARC(records []string) bool {
@@ -454,13 +469,35 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Message, error) {
 	return msg, e
 }
 
-func (s *Service) persistDomain(ctx context.Context, d Domain) error {
-	r := s.DB.WithContext(ctx).Model(&Domain{}).Where("id = ? AND team_id = ? AND token = ?", d.ID, d.TeamID, d.Token).Updates(map[string]any{"ready": d.Ready, "ownership": d.Ownership, "provisioned": d.Provisioned, "identity_status": d.IdentityStatus, "dkim_status": d.DKIMStatus, "mailfrom_status": d.MAILFROMStatus, "dmarc_status": d.DMARCStatus, "dkim_tokens": d.DKIMTokens, "checked_at": d.CheckedAt})
-	if r.Error != nil {
-		return r.Error
-	}
-	if r.RowsAffected != 1 {
-		return ErrDenied
-	}
-	return nil
+func (s *Service) persistDomain(ctx context.Context, d *Domain) error {
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Use the same account lock as operator actions, quota reservations and feedback.
+		var a Account
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&a, "team_id = ?", d.TeamID).Error; err != nil {
+			return err
+		}
+		if a.Suspended {
+			d.Ready = false
+		}
+		r := tx.Model(&Domain{}).Where("id = ? AND team_id = ? AND token = ? AND check_id = ?", d.ID, d.TeamID, d.Token, d.CheckID).Updates(map[string]any{"ready": d.Ready, "ownership": d.Ownership, "provisioned": d.Provisioned, "identity_status": d.IdentityStatus, "dkim_status": d.DKIMStatus, "mailfrom_status": d.MAILFROMStatus, "dmarc_status": d.DMARCStatus, "dkim_tokens": d.DKIMTokens, "checked_at": d.CheckedAt})
+		if r.Error != nil {
+			return r.Error
+		}
+		if r.RowsAffected != 1 {
+			return ErrDenied
+		}
+		if !d.Ready || !d.Ownership || !d.Provisioned || a.Approved || a.Suspended || a.Paused {
+			return nil
+		}
+		// Auto-approval never raises existing limits or resets consumed quota.
+		if err := tx.Model(&a).Updates(map[string]any{
+			"approved":              true,
+			"daily_limit":           min(a.DailyLimit, autoApprovalDailyLimit),
+			"monthly_limit":         min(a.MonthlyLimit, autoApprovalMonthlyLimit),
+			"monthly_budget_micros": min(a.MonthlyBudgetMicros, autoApprovalBudgetMicros),
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&Audit{ID: uuid.NewString(), TeamID: a.TeamID, Actor: "system:dns-verification", Action: "auto_approve", CreatedAt: s.Now()}).Error
+	})
 }

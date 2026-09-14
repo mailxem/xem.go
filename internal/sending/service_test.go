@@ -247,7 +247,7 @@ func TestDomainFailsClosedAndDoesNotResurrectRevocation(t *testing.T) {
 	require.NoError(t, e)
 	require.False(t, fresh.Ready)
 	require.NoError(t, s.DB.Model(&Domain{}).Where("id = ?", d.ID).Update("token", "new-token").Error)
-	require.ErrorIs(t, s.persistDomain(ctx, d), ErrDenied)
+	require.ErrorIs(t, s.persistDomain(ctx, &d), ErrDenied)
 	require.False(t, validDMARC([]string{"v=DMARC1; p=none", "v=DMARC1; p=reject"}))
 	require.False(t, validDMARC([]string{"v=DMARC1; p=invalid"}))
 }

@@ -29,6 +29,7 @@ type Account struct {
 func (Account) TableName() string { return "managed_accounts" }
 
 type Domain struct {
+	CheckID        string     `json:"-"`
 	ID             string     `gorm:"primaryKey;type:uuid" json:"id"`
 	TeamID         string     `gorm:"index;type:uuid;not null" json:"-"`
 	Name           string     `gorm:"uniqueIndex;not null" json:"name"`
