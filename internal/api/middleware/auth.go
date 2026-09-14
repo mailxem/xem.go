@@ -1,10 +1,7 @@
 package middleware
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"kori/internal/assistant"
 	"kori/internal/db"
 	"kori/internal/models"
@@ -225,26 +222,9 @@ func (m *AuthMiddleware) validateJWT(c echo.Context, tokenString string, next ec
 	log.Info("Request content type: %s", requestContentType)
 
 	if (c.Request().Method == "POST" || c.Request().Method == "PUT") && requestContentType != "multipart/form-data" {
-		body := c.Request().Body
-		defer func(body io.ReadCloser) {
-			err := body.Close()
-			if err != nil {
-				log.Error("Failed to close request body", err)
-			}
-		}(body)
-
-		var bodyMap map[string]interface{}
-		if err := json.NewDecoder(body).Decode(&bodyMap); err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON Fbody")
+		if err := injectRequestTeamID(c.Request(), team.ID); err != nil {
+			return err
 		}
-
-		bodyMap["teamId"] = team.ID
-		newBody, err := json.Marshal(bodyMap)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to encode body")
-		}
-
-		c.Request().Body = io.NopCloser(bytes.NewBuffer(newBody))
 	}
 
 	// Check method-based permissions
