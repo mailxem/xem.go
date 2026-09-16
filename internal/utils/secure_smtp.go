@@ -64,7 +64,16 @@ func sendSecureSMTP(message *gomail.Message, email *models.Email) error {
 			return err
 		}
 	}
-	if err := client.Mail(email.From); err != nil {
+	return sendSMTPMessage(client, message, email.From)
+}
+
+func sendSMTPMessage(client *smtp.Client, message *gomail.Message, from string) error {
+	// The envelope requires a mailbox, while the From header may include a display name.
+	sender, err := mail.ParseAddress(from)
+	if err != nil {
+		return fmt.Errorf("invalid SMTP sender address: %w", err)
+	}
+	if err := client.Mail(sender.Address); err != nil {
 		return err
 	}
 	for _, header := range []string{"To", "Cc", "Bcc"} {

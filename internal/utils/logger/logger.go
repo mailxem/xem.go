@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/fatih/color"
@@ -61,8 +62,14 @@ func (l *Logger) Warn(msg string, args ...interface{}) {
 
 func (l *Logger) Error(msg string, err error, args ...interface{}) error {
 	args = append(args, err)
+	if strings.Contains(msg, "%w") {
+		wrapped := fmt.Errorf(msg, args...)
+		formatted := l.formatMessage("ERROR", ERROR_EMOJI, wrapped.Error())
+		color.Red("%s", formatted)
+		return wrapped
+	}
 	formatted := l.formatMessage("ERROR", ERROR_EMOJI, fmt.Sprintf(msg, args...))
-	color.Red(formatted)
+	color.Red("%s", formatted)
 	return fmt.Errorf("%s: %w", msg, err)
 }
 
