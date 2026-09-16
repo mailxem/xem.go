@@ -1,5 +1,6 @@
-# Use the official Go image as a base
-FROM golang:1.24-alpine AS builder
+# syntax=docker/dockerfile:1
+# Compile on the runner's native architecture, including for ARM targets.
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -10,19 +11,22 @@ COPY go.mod go.sum ./
 # Download dependencies with caching
 RUN go mod download && go mod verify
 
-# Copy the source code
-COPY . .
+# Keep runtime assets and generated build metadata out of the compiler layers.
+COPY cmd ./cmd
+COPY internal ./internal
+COPY docs/swagger ./docs/swagger
 
-# Build the application with build cache
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o build/posthoot cmd/main.go
+ARG TARGETOS
+ARG TARGETARCH
 
-# Build helper binary with build cache
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o build/helper cmd/helper/main.go
+# Go schedules package compilation in parallel and shares dependencies across binaries.
+# GitHub Actions restores/exports this mount separately from the Docker layer cache.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /app/build/ ./cmd ./cmd/helper ./cmd/sending-admin \
+    && mv /app/build/cmd /app/build/posthoot
 
-# Build the operator CLI without shipping the Go toolchain
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o build/sending-admin ./cmd/sending-admin
-
-# Use a minimal alpine image for the final stage
+# Use a minimal runtime image for the target architecture.
 FROM gcr.io/distroless/static-debian12:nonroot
 
 # Set working directory
@@ -32,18 +36,18 @@ WORKDIR /app
 COPY --chmod=755 --from=builder /app/build/posthoot .
 COPY --chmod=755 --from=builder /app/build/helper .
 COPY --chmod=755 --from=builder /app/build/sending-admin .
-COPY --chmod=755 --from=builder /app/openapi.json .
-COPY --chmod=755 --from=builder /app/public/build-info.txt /app/public/build-info.txt
+COPY --chmod=755 openapi.json .
+COPY --chmod=755 public/build-info.txt /app/public/build-info.txt
 
 # Copy template seeder data for Airley templates
 # Source: /app/internal/models/seeder/airley/templates.json
 # Destination: /app/internal/models/seeder/airley/templates.json
-COPY --chmod=755 --from=builder /app/internal/models/seeder/airley/templates.json /app/internal/models/seeder/airley/
+COPY --chmod=755 internal/models/seeder/airley/templates.json /app/internal/models/seeder/airley/
 
 # Copy all initial setup seeder files for database initialization
 # Source: /app/internal/models/seeder/initial-setup/*
 # Destination: /app/internal/models/seeder/initial-setup/
-COPY --chmod=755 --from=builder /app/internal/models/seeder/initial-setup/* /app/internal/models/seeder/initial-setup/
+COPY --chmod=755 internal/models/seeder/initial-setup/* /app/internal/models/seeder/initial-setup/
 
 # Expose ports
 EXPOSE 9001 587

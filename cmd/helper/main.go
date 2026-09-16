@@ -1,4 +1,4 @@
-package helper
+package main
 
 import (
 	"bufio"
@@ -12,7 +12,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-func helper() {
+func main() {
 	var log = logger.New("helper")
 	log.Info("🔑 Starting encryption/decryption helper CLI")
 
