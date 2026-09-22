@@ -101,3 +101,163 @@ func TestFormBrandingAndHTMLAction(t *testing.T) {
 	rec = call("POST", path, echo.MIMEApplicationForm, "email=third%40example.com&consent=on")
 	require.Equal(t, 404, rec.Code)
 }
+
+func TestFormReceiptSurvivesRevisionAndArchiveWithoutDuplicateCapture(t *testing.T) {
+	h := newFormHarness(t)
+	f := h.create("optional")
+	path := "/public/" + f.Slug
+	input := map[string]any{"fields": map[string]string{"email": "reader@example.com", "interest": "personal"}, "version": f.Version, "requestId": uuid.NewString(), "sessionId": uuid.NewString()}
+	first := h.call("POST", path, input)
+	require.Equal(t, 200, first.Code, first.Body.String())
+	var original map[string]any
+	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &original))
+	updated := h.definition("required")
+	updated["successRedirectUrl"] = "https://example.com/new-thanks"
+	r := h.call("PUT", "/forms/"+f.ID, map[string]any{"name": "Updated signup", "listId": h.list, "status": "PUBLISHED", "definition": updated})
+	require.Equal(t, 200, r.Code, r.Body.String())
+	for _, status := range []string{"PUBLISHED", "ARCHIVED"} {
+		require.NoError(t, h.db.Model(&f).Update("status", status).Error)
+		r = h.call("POST", path, input)
+		require.Equal(t, 200, r.Code, r.Body.String())
+		var replay map[string]any
+		require.NoError(t, json.Unmarshal(r.Body.Bytes(), &replay))
+		require.Equal(t, original["submissionId"], replay["submissionId"])
+		require.Equal(t, "", replay["successRedirectUrl"])
+	}
+	input["fields"] = map[string]string{"email": "different@example.com", "interest": "personal"}
+	r = h.call("POST", path, input)
+	require.Equal(t, 409, r.Code, r.Body.String())
+	input["requestId"] = uuid.NewString()
+	r = h.call("POST", path, input)
+	require.Equal(t, 404, r.Code)
+	var count int64
+	require.NoError(t, h.db.Model(&models.FormSubmission{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
+	require.NoError(t, h.db.Model(&models.FormCompletionEvent{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
+}
+
+func TestRichFormRequiresCurrentVersionAndDoesNotEnrollUnsubscribedContacts(t *testing.T) {
+	h := newFormHarness(t)
+	f := h.create("required")
+	input := map[string]any{"fields": map[string]string{"email": "reader@example.com", "interest": "personal"}, "consent": true, "requestId": uuid.NewString(), "sessionId": uuid.NewString()}
+	r := h.call("POST", "/public/"+f.Slug, input)
+	require.Equal(t, 409, r.Code, r.Body.String())
+	seed(t, h.db, &models.Contact{Base: models.Base{ID: uuid.NewString()}, TeamID: h.team, ListID: h.list, Email: "reader@example.com", Status: models.SubscriberStatusUnsubscribed})
+	input["version"] = f.Version
+	r = h.call("POST", "/public/"+f.Slug, input)
+	require.Equal(t, 200, r.Code, r.Body.String())
+	var submission models.FormSubmission
+	require.NoError(t, h.db.First(&submission).Error)
+	require.Nil(t, submission.ContactID)
+	var completion models.FormCompletionEvent
+	require.NoError(t, h.db.First(&completion).Error)
+	require.Empty(t, completion.ContactID)
+	var contact models.Contact
+	require.NoError(t, h.db.First(&contact).Error)
+	require.Equal(t, models.SubscriberStatusUnsubscribed, contact.Status)
+}
+
+func TestFormProgressTokenDoesNotReviveAfterRetentionAndRequiresStrongSecret(t *testing.T) {
+	h := newFormHarness(t)
+	f := h.create("optional")
+	path := "/public/" + f.Slug
+	input := map[string]any{"fields": map[string]string{"email": "reader@example.com"}, "version": f.Version, "requestId": uuid.NewString(), "sessionId": uuid.NewString()}
+	readToken := func(r *httptest.ResponseRecorder) string {
+		t.Helper()
+		require.Equal(t, 200, r.Code, r.Body.String())
+		var saved map[string]any
+		require.NoError(t, json.Unmarshal(r.Body.Bytes(), &saved))
+		return saved["resumeToken"].(string)
+	}
+	first := readToken(h.call("POST", path+"/progress", input))
+	require.Equal(t, first, readToken(h.call("POST", path+"/progress", input)))
+	require.NoError(t, h.db.Where("form_id = ?", f.ID).Delete(&models.FormProgress{}).Error)
+	second := readToken(h.call("POST", path+"/progress", input))
+	require.NotEqual(t, first, second)
+	require.Equal(t, 404, h.call("POST", path+"/resume", map[string]string{"token": first}).Code)
+	require.Equal(t, 200, h.call("POST", path+"/resume", map[string]string{"token": second}).Code)
+	weak := handlers.NewMarketingHandler(h.db, "weak", "https://api.example.com")
+	h.app.POST("/weak/:slug/progress", weak.SaveFormProgress)
+	h.app.POST("/weak/:slug/resume", weak.ResumeForm)
+	require.Equal(t, 503, h.call("POST", "/weak/"+f.Slug+"/progress", input).Code)
+	require.Equal(t, 503, h.call("POST", "/weak/"+f.Slug+"/resume", map[string]string{"token": second}).Code)
+}
+
+func TestFormCompletionClearsAllSavedCopiesOnlyForItsSession(t *testing.T) {
+	h := newFormHarness(t)
+	f := h.create("optional")
+	path := "/public/" + f.Slug
+	session, otherSession := uuid.NewString(), uuid.NewString()
+	for _, id := range []string{session, session, otherSession} {
+		r := h.call("POST", path+"/progress", map[string]any{"fields": map[string]string{"email": "reader@example.com"}, "version": f.Version, "requestId": uuid.NewString(), "sessionId": id})
+		require.Equal(t, 200, r.Code, r.Body.String())
+	}
+	r := h.call("POST", path, map[string]any{"fields": map[string]string{"email": "reader@example.com", "interest": "personal"}, "version": f.Version, "requestId": uuid.NewString(), "sessionId": session})
+	require.Equal(t, 200, r.Code, r.Body.String())
+	var progress []models.FormProgress
+	require.NoError(t, h.db.Find(&progress).Error)
+	require.Len(t, progress, 1)
+	require.Equal(t, otherSession, progress[0].SessionID)
+}
+
+func TestFormAnalyticsSeparatesRevisedStepsAndDeduplicatesLifetimeVisitors(t *testing.T) {
+	h := newFormHarness(t)
+	f := h.create("optional")
+	path := "/public/" + f.Slug
+	session := uuid.NewString()
+	track := func(version int) {
+		for _, event := range []string{"view", "start", "step"} {
+			input := map[string]any{"sessionId": session, "version": version, "event": event}
+			if event == "step" {
+				input["pageId"] = "details"
+			}
+			r := h.call("POST", path+"/events", input)
+			require.Equal(t, 204, r.Code, r.Body.String())
+		}
+	}
+	track(f.Version)
+	r := h.call("PUT", "/forms/"+f.ID, map[string]any{"name": "Updated signup", "listId": h.list, "status": "PUBLISHED", "definition": h.definition("optional")})
+	require.Equal(t, 200, r.Code, r.Body.String())
+	var updated models.Form
+	require.NoError(t, json.Unmarshal(r.Body.Bytes(), &updated))
+	r = h.call("GET", "/forms/"+f.ID+"/analytics", nil)
+	var metrics struct {
+		Views, Starts int64
+		Steps         []struct{ Views int64 }
+	}
+	require.NoError(t, json.Unmarshal(r.Body.Bytes(), &metrics))
+	require.EqualValues(t, 1, metrics.Views)
+	require.Zero(t, metrics.Steps[0].Views)
+	track(updated.Version)
+	r = h.call("GET", "/forms/"+f.ID+"/analytics", nil)
+	require.NoError(t, json.Unmarshal(r.Body.Bytes(), &metrics))
+	require.EqualValues(t, 1, metrics.Views)
+	require.EqualValues(t, 1, metrics.Starts)
+	require.EqualValues(t, 1, metrics.Steps[0].Views)
+}
+
+func TestFormResumeKeepsCampaignAttributionWhenReferrerChanges(t *testing.T) {
+	h := newFormHarness(t)
+	f := h.create("optional")
+	path := "/public/" + f.Slug
+	input := map[string]any{"fields": map[string]string{"email": "reader@example.com"}, "version": f.Version, "requestId": uuid.NewString(), "sessionId": uuid.NewString(), "attribution": map[string]string{"utmSource": "newsletter"}}
+	r := h.call("POST", path+"/progress", input)
+	require.Equal(t, 200, r.Code, r.Body.String())
+	var saved map[string]any
+	require.NoError(t, json.Unmarshal(r.Body.Bytes(), &saved))
+	input["resumeToken"] = saved["resumeToken"]
+	input["requestId"] = uuid.NewString()
+	input["attribution"] = map[string]string{"referrer": "https://example.com/return"}
+	r = h.call("POST", path+"/progress", input)
+	require.Equal(t, 200, r.Code, r.Body.String())
+	input["requestId"] = uuid.NewString()
+	input["fields"] = map[string]string{"email": "reader@example.com", "interest": "personal"}
+	input["attribution"] = map[string]string{"referrer": "https://example.com/return"}
+	r = h.call("POST", path, input)
+	require.Equal(t, 200, r.Code, r.Body.String())
+	var submission models.FormSubmission
+	require.NoError(t, h.db.First(&submission).Error)
+	require.Equal(t, "newsletter", *submission.UTMSource)
+	require.Equal(t, "https://example.com/return", *submission.Referrer)
+}

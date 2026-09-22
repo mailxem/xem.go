@@ -20,7 +20,7 @@ func (s *AutomationService) SaveGraph(ctx context.Context, a *models.Automation)
 		a.TriggerEvent = "manual"
 	}
 	switch a.TriggerEvent {
-	case "manual", "contact.created", "email.opened", "email.clicked":
+	case "manual", "contact.created", "email.opened", "email.clicked", "form.completed":
 	default:
 		return fmt.Errorf("unsupported trigger")
 	}
@@ -40,7 +40,9 @@ func (s *AutomationService) SaveGraph(ctx context.Context, a *models.Automation)
 				return fmt.Errorf("pause this workflow before editing")
 			}
 			var running int64
-			tx.Model(&models.AutomationExecution{}).Where("automation_id = ? AND status IN ?", a.ID, []string{"RUNNING", "WAITING", "PAUSED"}).Count(&running)
+			if err := tx.Model(&models.AutomationExecution{}).Where("automation_id = ? AND status IN ?", a.ID, []string{"RUNNING", "WAITING", "PAUSED"}).Count(&running).Error; err != nil {
+				return err
+			}
 			if running > 0 {
 				return fmt.Errorf("wait for in-flight executions before changing the graph")
 			}
@@ -56,7 +58,9 @@ func (s *AutomationService) SaveGraph(ctx context.Context, a *models.Automation)
 				return fmt.Errorf("node IDs must be UUIDs")
 			}
 			var count int64
-			tx.Model(&models.AutomationNode{}).Where("id = ? AND automation_id <> ?", n.ID, a.ID).Count(&count)
+			if err := tx.Model(&models.AutomationNode{}).Where("id = ? AND automation_id <> ?", n.ID, a.ID).Count(&count).Error; err != nil {
+				return err
+			}
 			if count > 0 {
 				return fmt.Errorf("invalid node ownership")
 			}
@@ -95,6 +99,23 @@ func (s *AutomationService) SaveGraph(ctx context.Context, a *models.Automation)
 	})
 }
 func (s *AutomationService) ValidateConfiguration(a *models.Automation) error {
+	if a.TriggerEvent == "form.completed" {
+		for _, node := range a.Nodes {
+			if node.Type != models.NodeTypeStart {
+				continue
+			}
+			var config struct {
+				FormID string `json:"formId"`
+			}
+			if json.Unmarshal(node.Data, &config) != nil || uuid.Validate(config.FormID) != nil {
+				return fmt.Errorf("choose a form for this submission trigger")
+			}
+			var count int64
+			if err := s.db.Model(&models.Form{}).Where("id = ? AND team_id = ? AND is_deleted = ?", config.FormID, a.TeamID, false).Count(&count).Error; err != nil || count != 1 {
+				return fmt.Errorf("choose a form in this workspace")
+			}
+		}
+	}
 	outgoing := map[string][]models.AutomationNodeEdge{}
 	for _, edge := range a.Edges {
 		outgoing[edge.SourceID] = append(outgoing[edge.SourceID], edge)

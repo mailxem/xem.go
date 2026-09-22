@@ -321,6 +321,9 @@ func (c *TaskClient) EnqueueAutomationTask(ctx context.Context, task AutomationE
 		asynq.Timeout(TimeoutLong),
 		asynq.MaxRetry(RetryDefault),
 	}
+	// A continuation has its own queue identity while retaining the execution ID.
+	// This also makes a form outbox retry safe after a successful Redis enqueue.
+	opts = append(opts, asynq.TaskID("automation:"+task.ExecutionID+":"+task.CurrentNodeID), asynq.Retention(24*time.Hour))
 
 	if processIn > 0 {
 		opts = append(opts, asynq.ProcessIn(processIn))
@@ -330,6 +333,9 @@ func (c *TaskClient) EnqueueAutomationTask(ctx context.Context, task AutomationE
 		asynq.NewTask(TaskTypeAutomationExecute, payload),
 		opts...,
 	)
+	if errors.Is(err, asynq.ErrTaskIDConflict) || errors.Is(err, asynq.ErrDuplicateTask) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to enqueue automation task: %w", err)
 	}

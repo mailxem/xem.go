@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -50,10 +51,15 @@ func (t formTheme) validate() error {
 }
 
 type formSubmissionInput struct {
-	Fields    map[string]string `json:"fields"`
-	Consent   bool              `json:"consent"`
-	Website   string            `json:"website"`
-	RequestID string            `json:"requestId"`
+	Fields      map[string]string `json:"fields"`
+	Consent     bool              `json:"consent"`
+	Website     string            `json:"website"`
+	RequestID   string            `json:"requestId"`
+	Version     int               `json:"version"`
+	SessionID   string            `json:"sessionId"`
+	ResumeToken string            `json:"resumeToken"`
+	PageID      string            `json:"pageId"`
+	Attribution formAttribution   `json:"attribution"`
 }
 
 func isHTMLFormPost(c echo.Context) bool {
@@ -85,6 +91,15 @@ func bindFormSubmission(c echo.Context) (formSubmissionInput, error) {
 	in.Consent = values.Get("consent") == "on" || values.Get("consent") == "true" || values.Get("consent") == "1"
 	in.Website = values.Get("website")
 	in.RequestID = values.Get("requestId")
+	in.SessionID = values.Get("sessionId")
+	in.ResumeToken = values.Get("resumeToken")
+	if values.Get("version") != "" {
+		var err error
+		in.Version, err = strconv.Atoi(values.Get("version"))
+		if err != nil {
+			return in, err
+		}
+	}
 	if in.RequestID == "" {
 		in.RequestID = uuid.NewString()
 	}
@@ -100,9 +115,9 @@ func formSubmissionSuccess(c echo.Context, message string) error {
 		return c.JSON(200, map[string]interface{}{"ok": true, "message": message})
 	}
 	if strings.TrimSpace(message) == "" {
-		message = "Thanks for joining us!"
+		message = "Thanks for your response!"
 	}
-	return formHTMLResponse(c, http.StatusOK, "You’re on the list.", message)
+	return formHTMLResponse(c, http.StatusOK, "Thanks for your response.", message)
 }
 func (h *MarketingHandler) SubmitForm(c echo.Context) error {
 	err := h.submitForm(c)

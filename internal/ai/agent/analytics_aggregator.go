@@ -113,6 +113,9 @@ func (a *AnalyticsAggregator) GetEmailAnalytics(ctx context.Context, scope Analy
 	if !scope.EndDate.IsZero() {
 		trackingQuery = trackingQuery.Where("email_trackings.timestamp <= ?", scope.EndDate)
 	}
+	// Each metric starts from the same scope; event predicates must not accumulate
+	// across opens, clicks, bounces, and distinct counts.
+	trackingQuery = trackingQuery.Session(&gorm.Session{})
 
 	// Count opens
 	var totalOpened int64

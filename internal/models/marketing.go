@@ -33,7 +33,8 @@ type ContactNote struct {
 
 // FormReceipt makes retries idempotent without exposing whether an email is subscribed.
 type FormReceipt struct {
-	ID        string `gorm:"primaryKey"`
-	FormID    string `gorm:"type:uuid;index"`
-	CreatedAt time.Time
+	ID           string `gorm:"primaryKey"`
+	FormID       string `gorm:"type:uuid;index"`
+	SubmissionID string `gorm:"type:uuid"`
+	CreatedAt    time.Time
 }

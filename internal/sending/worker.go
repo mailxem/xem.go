@@ -74,6 +74,8 @@ func (s *Service) ProcessOne(ctx context.Context) error {
 			status = "SENT"
 			detail = "Accepted by SES; delivery is not yet confirmed."
 		} else {
+			// Keep provider diagnostics in operator logs; persisted status is customer-facing.
+			log.Printf("managed delivery provider send failed: message_id=%s error=%v", m.ID, err)
 			var ae smithy.APIError
 			if errors.As(err, &ae) && ae.ErrorFault() == smithy.FaultClient {
 				detail = "Provider rejected the message: " + ae.ErrorCode()

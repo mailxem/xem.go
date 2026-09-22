@@ -139,11 +139,15 @@ func TestMCPAuthorizeChecksKeyExpiryAndDeletion(t *testing.T) {
 	seed(t, db, &valid)
 	expired := models.APIKey{Base: models.Base{ID: uuid.NewString()}, TeamID: team, Key: "expired", Name: "Expired", ExpiresAt: time.Now().Add(-time.Hour)}
 	seed(t, db, &expired)
+	expiredEast := models.APIKey{Base: models.Base{ID: uuid.NewString()}, TeamID: team, Key: "expired-east", Name: "Expired east", ExpiresAt: time.Now().Add(-time.Hour).In(time.FixedZone("east", 12*3600))}
+	seed(t, db, &expiredEast)
+	validWest := models.APIKey{Base: models.Base{ID: uuid.NewString()}, TeamID: team, Key: "valid-west", Name: "Valid west", ExpiresAt: time.Now().Add(time.Hour).In(time.FixedZone("west", -12*3600))}
+	seed(t, db, &validWest)
 	deleted := models.APIKey{Base: models.Base{ID: uuid.NewString(), IsDeleted: true}, TeamID: team, Key: "deleted", Name: "Deleted"}
 	seed(t, db, &deleted)
 	e := echo.New()
 	e.GET("/authorize", handlers.MCPAuthorize(db))
-	for key, status := range map[string]int{"valid": 204, "expired": 401, "deleted": 401, "unknown": 401, "": 401} {
+	for key, status := range map[string]int{"valid": 204, "valid-west": 204, "expired": 401, "expired-east": 401, "deleted": 401, "unknown": 401, "": 401} {
 		r := httptest.NewRequest("GET", "/authorize", nil)
 		r.Header.Set("X-API-Key", key)
 		w := httptest.NewRecorder()

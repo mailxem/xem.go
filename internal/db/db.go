@@ -310,6 +310,7 @@ func runMigrations() error {
 		&models.Form{},
 		&models.FormField{},
 		&models.FormSubmission{},
+		&models.FormRevision{}, &models.FormProgress{}, &models.FormAnalyticsEvent{}, &models.FormCompletionEvent{},
 		&models.LandingPage{},
 		&models.FormABTest{},
 
