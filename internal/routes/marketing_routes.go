@@ -46,6 +46,10 @@ func SetupMarketingRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config) {
 		Store:               em.NewRateLimiterMemoryStoreWithConfig(em.RateLimiterMemoryStoreConfig{Rate: rate.Limit(0.1), Burst: 3}),
 		IdentifierExtractor: func(c echo.Context) (string, error) { id, _ := c.Get("teamID").(string); return id, nil },
 	}))
+	g.POST("/form-draft", handlers.FormDraftHandler(writer), em.BodyLimit("8K"), middleware.RequirePermissions(db, "marketing:create"), em.RateLimiterWithConfig(em.RateLimiterConfig{
+		Store:               em.NewRateLimiterMemoryStoreWithConfig(em.RateLimiterMemoryStoreConfig{Rate: rate.Limit(0.1), Burst: 3}),
+		IdentifierExtractor: func(c echo.Context) (string, error) { id, _ := c.Get("teamID").(string); return id, nil },
+	}))
 	g.PUT("/profile", h.SaveProfile)
 	g.GET("/branding", h.Branding)
 	g.PUT("/branding", h.Branding, middleware.RequirePermissions(db, "branding_settings:update"))
@@ -72,15 +76,21 @@ func SetupMarketingRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config) {
 	g.POST("/newsletters/:id/pause", h.PauseNewsletter, middleware.RequirePermissions(db, "campaigns:create"))
 	g.GET("/newsletters/:id/editions", h.NewsletterEditions, middleware.RequirePermissions(db, "campaigns:read"))
 	g.POST("/template-starters", h.ImportTemplateStarter)
-	g.GET("/forms", h.Forms)
-	g.POST("/forms", h.SaveForm)
-	g.PUT("/forms/:id", h.SaveForm)
-	g.GET("/forms/:id/submissions", h.Submissions)
+	g.GET("/forms", h.Forms, middleware.RequirePermissions(db, "marketing:read"))
+	g.POST("/forms", h.SaveForm, em.BodyLimit("256K"), middleware.RequirePermissions(db, "marketing:create"))
+	g.PUT("/forms/:id", h.SaveForm, em.BodyLimit("256K"), middleware.RequirePermissions(db, "marketing:create"))
+	g.GET("/forms/:id/submissions", h.Submissions, middleware.RequirePermissions(db, "marketing:read"))
+	g.GET("/forms/:id/analytics", h.FormAnalytics, middleware.RequirePermissions(db, "marketing:read"))
+	g.POST("/forms/:id/journey", h.CreateFormJourney, em.BodyLimit("64K"), middleware.RequirePermissions(db, "templates:create", "automations:create"))
 	g.GET("/contacts/:id/notes", h.Notes)
 	g.POST("/contacts/:id/notes", h.Notes)
 	public := e.Group("/public", em.BodyLimit("32K"), em.RateLimiter(em.NewRateLimiterMemoryStore(rate.Limit(2))))
 	public.GET("/forms/:slug", h.PublicForm)
 	public.POST("/forms/:slug", h.SubmitForm)
+	public.GET("/forms/:slug/manifest", h.FormManifest)
+	public.POST("/forms/:slug/progress", h.SaveFormProgress)
+	public.POST("/forms/:slug/resume", h.ResumeForm)
+	public.POST("/forms/:slug/events", h.RecordFormEvent)
 	public.GET("/unsubscribe/:team/:contact/:token", h.Unsubscribe)
 	public.POST("/unsubscribe/:team/:contact/:token", h.Unsubscribe)
 }

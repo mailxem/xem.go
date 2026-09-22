@@ -60,6 +60,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := asynq.NewServeMux()
 
 	mux.HandleFunc(TaskTypeNewsletterTick, s.handler.HandleNewsletterTick)
+	mux.HandleFunc(TaskTypeFormCompletionTick, s.handler.HandleFormCompletionTick)
 
 	// Register task handlers
 	mux.HandleFunc(TaskTypeEmailSend, s.handler.HandleEmailSend)

@@ -55,6 +55,9 @@ func (s *Scheduler) Stop() {
 
 // registerTasks registers all periodic tasks
 func (s *Scheduler) registerTasks() error {
+	if _, err := s.scheduler.Register("@every 15s", asynq.NewTask(TaskTypeFormCompletionTick, nil), asynq.Queue(QueueDefault), asynq.Unique(14*time.Second)); err != nil {
+		return err
+	}
 	if _, err := s.scheduler.Register("@every 1m", asynq.NewTask(TaskTypeNewsletterTick, nil), asynq.Queue(QueueDefault), asynq.Unique(50*time.Second)); err != nil {
 		return err
 	}

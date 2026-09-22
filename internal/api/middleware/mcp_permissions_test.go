@@ -17,6 +17,10 @@ func TestMCPResourceMapping(t *testing.T) {
 		"/api/v1/marketing/campaign-drafts":       "campaigns",
 		"/api/v1/marketing/newsletters/abc/pause": "campaigns",
 		"/api/v1/marketing/options":               "lists",
+		"/api/v1/marketing/forms":                 "marketing",
+		"/api/v1/marketing/forms/abc/analytics":   "marketing",
+		"/api/v1/marketing/forms/abc/journey":     "marketing",
+		"/api/v1/marketing/form-draft":            "marketing",
 		"/api/v1/mailing-lists":                   "lists",
 		"/api/v1/analytics/report":                "analytics",
 	} {
