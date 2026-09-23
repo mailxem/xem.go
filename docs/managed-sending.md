@@ -36,6 +36,14 @@ AWS IAM reference used for the template: [SES v2 actions and resource types](htt
 
 ## Optional external SMTP submission
 
+The raw MIME transport requires `ses:SendRawEmail` even though the SDK operation
+is SESv2 `SendEmail`. Keep both sending actions in the scoped runtime policy and
+update both the backend and devops CloudFormation template copies together.
+Explicit IAM `AccessDenied`/`AccessDeniedException` responses are recorded as
+FAILED even when the SDK reports an unknown fault classification. Transport
+failures with uncertain acceptance remain DELIVERY_UNKNOWN and are never retried
+automatically. This classification does not rewrite historical message outcomes.
+
 Set `MANAGED_SMTP_ENABLED=true`, a listening address in `MANAGED_SMTP_ADDR` (default `:587`), the public hostname in `MANAGED_SMTP_HOST`, and readable PEM certificate/key paths in `MANAGED_SMTP_TLS_CERT` and `MANAGED_SMTP_TLS_KEY`. The hostname must resolve to the listener. Expose TCP port 587 through a layer-4 load balancer/firewall; ordinary HTTP ingress is insufficient. The UI advertises port 587; map the public port to your internal bind port. Use a publicly trusted certificate for the hostname. Certificate files reload on each TLS handshake; replace them atomically during renewal.
 
 Customers create a named credential for a verified domain. The username is its UUID, the password is displayed once, and only a bcrypt hash is stored. Credentials expire in 90 days and are revocable. They cannot be used as AWS credentials or management API keys. Clients must use STARTTLS and PLAIN authentication inside TLS; unauthenticated relay and plaintext authentication are rejected. Responses acknowledge only a committed outbox entry. SMTP itself does not provide exactly-once delivery: a client retry after losing the final 250 response can create a duplicate. Internal Xem sends use a stable idempotency key.
@@ -51,6 +59,7 @@ The listener limits connections (100), per-IP connection/auth attempts, recipien
 - Raw MIME is removed after seven days. Old queued messages expire as failed before content deletion. Recovery updates both the outbox and its source Xem email. Metadata (addresses, subject, events, domain history) remains for support; define an operator retention policy and secure database/backups accordingly. No automatic metadata deletion is supplied.
 - Permanent bounces and complaints suppress the address within its workspace; existing suppressions and unsubscribed contacts also block sending. Dispatch rechecks prevent a queued message bypassing a newly recorded suppression. Do not remove suppressions merely to force a retry.
 - Domain checks run periodically. Verification older than 24 hours blocks sending. Missing DNS or provider errors clear readiness. Disconnect revokes credentials and invalidates the ownership token while retaining history and the AWS identity. Transfers and abandoned domain claims require operator review; there is no automatic domain transfer/deletion.
+- A missing DNS record is a successful check with pending verification. Resolver failures return 503, check timeouts return 504, SES setup/status failures return 502, and internal verification failures return 500. These responses describe domain verification rather than message sending. For HTTP and periodic checks, search backend logs for `managed domain check failed`; correlate `domain_id`, `stage`, `region`, `provider_code`, `operation`, `request_id`, and `sql_state`. Raw provider messages, credentials, ownership tokens, and SQL are excluded from this diagnostic log. Confirm the running backend version before expecting these diagnostics.
 - Paused accounts and domains waiting for readiness keep messages queued until they become eligible or expire after seven days. Pause, suspension, revocation, and domain disconnection stop future eligible dispatches. A request already submitted to SES may complete. Policy-rejected queued messages become failed/suppressed and retain their quota reservation.
 - SES requires TLS for delivery through each new managed configuration set. Servers without compatible TLS will not receive these messages; monitor delays/bounces. Do not reuse unrelated pre-existing `xem-*` resources.
 

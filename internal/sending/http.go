@@ -147,7 +147,7 @@ func (s *Service) checkDomain(c echo.Context) error {
 	defer cancel()
 	d, e := s.RefreshDomain(ctx, workspace(c), c.Param("id"))
 	if e != nil {
-		return httpError(e)
+		return domainCheckHTTPError(e)
 	}
 	return c.JSON(200, s.view(d))
 }

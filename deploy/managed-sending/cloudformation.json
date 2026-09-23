@@ -156,7 +156,8 @@
               "Sid": "ManagedDelivery",
               "Effect": "Allow",
               "Action": [
-                "ses:SendEmail"
+                "ses:SendEmail",
+                "ses:SendRawEmail"
               ],
               "Resource": [
                 {

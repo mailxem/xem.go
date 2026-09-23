@@ -118,7 +118,14 @@ func (s *Service) AddDomain(ctx context.Context, team, name string) (Domain, err
 	})
 	return d, err
 }
-func (s *Service) RefreshDomain(ctx context.Context, team, id string) (Domain, error) {
+func (s *Service) RefreshDomain(ctx context.Context, team, id string) (result Domain, err error) {
+	stage := "load_domain"
+	defer func() {
+		if err != nil {
+			err = &domainCheckError{stage: stage, cause: err}
+			logDomainCheckError(team, id, s.Config.Region, err)
+		}
+	}()
 	var d Domain
 	if !s.Config.Enabled {
 		return d, ErrDenied
@@ -127,6 +134,7 @@ func (s *Service) RefreshDomain(ctx context.Context, team, id string) (Domain, e
 		return d, e
 	}
 	// A newer check invalidates any in-flight result before it can approve an account.
+	stage = "invalidate_check"
 	d.CheckID = uuid.NewString()
 	r := s.DB.WithContext(ctx).Model(&Domain{}).Where("id = ? AND team_id = ? AND token = ?", d.ID, d.TeamID, d.Token).Updates(map[string]any{"ready": false, "ownership": false, "check_id": d.CheckID})
 	if r.Error != nil {
@@ -137,7 +145,11 @@ func (s *Service) RefreshDomain(ctx context.Context, team, id string) (Domain, e
 	}
 	d.Ready = false
 	d.Ownership = false
+	stage = "ownership_dns"
 	records, e := s.DNS.LookupTXT(ctx, "_xem."+d.Name)
+	if e != nil && !dnsRecordMissing(e) {
+		return d, e
+	}
 	if e == nil {
 		for _, r := range records {
 			if r == d.Token {
@@ -149,24 +161,29 @@ func (s *Service) RefreshDomain(ctx context.Context, team, id string) (Domain, e
 	d.CheckedAt = &now
 	if !d.Ownership {
 		d.IdentityStatus = "OWNERSHIP_REQUIRED"
+		stage = "save_domain"
 		return d, s.persistDomain(ctx, &d)
 	}
+	stage = "load_account"
 	a, err := s.Account(ctx, team)
 	if err != nil {
 		return d, err
 	}
 	if a.Suspended {
+		stage = "save_domain"
 		if err := s.persistDomain(ctx, &d); err != nil {
 			return d, err
 		}
 		return d, ErrDenied
 	}
 	if !d.Provisioned {
+		stage = "provision"
 		if e = s.Provider.Provision(ctx, team, d.Name); e != nil {
 			return d, fmt.Errorf("provider setup failed; contact the operator: %w", e)
 		}
 		d.Provisioned = true
 	}
+	stage = "identity"
 	identity, e := s.Provider.Identity(ctx, d.Name)
 	if e != nil {
 		return d, e
@@ -176,11 +193,16 @@ func (s *Service) RefreshDomain(ctx context.Context, team, id string) (Domain, e
 	d.MAILFROMStatus = identity.MAILFROM
 	d.DKIMTokens = strings.Join(identity.Tokens, ",")
 	d.DMARCStatus = "MISSING_OR_INVALID"
+	stage = "dmarc_dns"
 	records, e = s.DNS.LookupTXT(ctx, "_dmarc."+d.Name)
+	if e != nil && !dnsRecordMissing(e) {
+		return d, e
+	}
 	if e == nil && validDMARC(records) {
 		d.DMARCStatus = "VALID"
 	}
 	d.Ready = identity.Verified && d.DKIMStatus == "SUCCESS" && d.MAILFROMStatus == "SUCCESS" && d.DMARCStatus == "VALID"
+	stage = "save_domain"
 	e = s.persistDomain(ctx, &d)
 	return d, e
 }
