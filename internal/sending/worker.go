@@ -77,7 +77,9 @@ func (s *Service) ProcessOne(ctx context.Context) error {
 			// Keep provider diagnostics in operator logs; persisted status is customer-facing.
 			log.Printf("managed delivery provider send failed: message_id=%s error=%v", m.ID, err)
 			var ae smithy.APIError
-			if errors.As(err, &ae) && ae.ErrorFault() == smithy.FaultClient {
+			// SES can decode IAM denials as GenericAPIError with FaultUnknown.
+			// These explicit rejections still prove the message was not accepted.
+			if errors.As(err, &ae) && (ae.ErrorFault() == smithy.FaultClient || ae.ErrorCode() == "AccessDenied" || ae.ErrorCode() == "AccessDeniedException") {
 				detail = "Provider rejected the message: " + ae.ErrorCode()
 			} else {
 				status = "DELIVERY_UNKNOWN"
