@@ -14,7 +14,7 @@ import (
 func unapprovedSending(t *testing.T) (*Service, string, Domain, *fakeProvider) {
 	t.Helper()
 	s, team, d, p := setup(t)
-	require.NoError(t, s.DB.Model(&Account{}).Where("team_id = ?", team).Updates(map[string]any{"approved": false, "daily_limit": 200, "monthly_limit": 1000, "monthly_budget_micros": 1000000}).Error)
+	require.NoError(t, s.DB.Model(&Account{}).Where("team_id = ?", team).Updates(map[string]any{"approved": false, "daily_limit": 100, "monthly_limit": 3000, "monthly_budget_micros": 3000000}).Error)
 	require.NoError(t, s.DB.Model(&Domain{}).Where("id = ?", d.ID).Updates(map[string]any{"ready": false, "provisioned": false, "ownership": false, "dkim_tokens": ""}).Error)
 	p.provisions = 0
 	return s, team, d, p
@@ -62,9 +62,9 @@ func TestAutomaticApprovalRequiresCompleteDNS(t *testing.T) {
 	a, err = s.Account(ctx, team)
 	require.NoError(t, err)
 	require.True(t, a.Approved)
-	require.EqualValues(t, 50, a.DailyLimit)
-	require.EqualValues(t, 200, a.MonthlyLimit)
-	require.EqualValues(t, 200000, a.MonthlyBudgetMicros)
+	require.EqualValues(t, 100, a.DailyLimit)
+	require.EqualValues(t, 3000, a.MonthlyLimit)
+	require.EqualValues(t, 3000000, a.MonthlyBudgetMicros)
 	_, err = s.Submit(ctx, input(team, d))
 	require.NoError(t, err)
 	_, err = s.RefreshDomain(ctx, team, d.ID)
@@ -74,7 +74,7 @@ func TestAutomaticApprovalRequiresCompleteDNS(t *testing.T) {
 	require.EqualValues(t, 1, count, "rechecking must not issue approval again")
 	require.Equal(t, 1, p.provisions)
 	// The assigned starter limit must be enforced by submission, not just shown.
-	require.NoError(t, s.DB.Model(&Account{}).Where("team_id = ?", team).Update("daily_used", 50).Error)
+	require.NoError(t, s.DB.Model(&Account{}).Where("team_id = ?", team).Update("daily_used", 100).Error)
 	_, err = s.Submit(ctx, input(team, d))
 	require.ErrorIs(t, err, ErrLimit)
 }

@@ -70,6 +70,7 @@ func createContext(t *testing.T, db *gorm.DB) *automation.ExecutionContext {
 	return &automation.ExecutionContext{
 		AutomationID: automationID,
 		ContactID:    contactID,
+		TeamID:       teamID,
 		Contact:      contact,
 		Variables:    make(map[string]interface{}),
 		ExecutionLog: []automation.LogEntry{},
@@ -179,10 +180,6 @@ func TestCondition_Equals(t *testing.T) {
 			{"variable": "score", "operator": "==", "value": "100"},
 		},
 		"operator": "AND",
-		"branches": map[string]string{
-			"true":  "yes-node",
-			"false": "no-node",
-		},
 	}
 	dataJSON, _ := json.Marshal(data)
 
@@ -191,6 +188,8 @@ func TestCondition_Equals(t *testing.T) {
 		Type: models.NodeTypeCondition,
 		Data: datatypes.JSON(dataJSON),
 	}
+
+	require.NoError(t, db.Create(&[]models.AutomationNodeEdge{{AutomationID: ctx.AutomationID, SourceID: node.ID, TargetID: "yes-node", Label: "true"}, {AutomationID: ctx.AutomationID, SourceID: node.ID, TargetID: "no-node", Label: "false"}}).Error)
 
 	result, err := processor.Process(ctx, node)
 	require.NoError(t, err)
@@ -211,10 +210,6 @@ func TestCondition_GreaterThan(t *testing.T) {
 			{"variable": "count", "operator": ">", "value": "50"},
 		},
 		"operator": "AND",
-		"branches": map[string]string{
-			"true":  "high",
-			"false": "low",
-		},
 	}
 	dataJSON, _ := json.Marshal(data)
 
@@ -223,6 +218,8 @@ func TestCondition_GreaterThan(t *testing.T) {
 		Type: models.NodeTypeCondition,
 		Data: datatypes.JSON(dataJSON),
 	}
+
+	require.NoError(t, db.Create(&[]models.AutomationNodeEdge{{AutomationID: ctx.AutomationID, SourceID: node.ID, TargetID: "high", Label: "true"}, {AutomationID: ctx.AutomationID, SourceID: node.ID, TargetID: "low", Label: "false"}}).Error)
 
 	result, err := processor.Process(ctx, node)
 	require.NoError(t, err)
@@ -242,10 +239,6 @@ func TestCondition_Contains(t *testing.T) {
 			{"variable": "tags", "operator": "contains", "value": "vip"},
 		},
 		"operator": "AND",
-		"branches": map[string]string{
-			"true":  "vip-flow",
-			"false": "regular-flow",
-		},
 	}
 	dataJSON, _ := json.Marshal(data)
 
@@ -254,6 +247,8 @@ func TestCondition_Contains(t *testing.T) {
 		Type: models.NodeTypeCondition,
 		Data: datatypes.JSON(dataJSON),
 	}
+
+	require.NoError(t, db.Create(&[]models.AutomationNodeEdge{{AutomationID: ctx.AutomationID, SourceID: node.ID, TargetID: "vip-flow", Label: "true"}, {AutomationID: ctx.AutomationID, SourceID: node.ID, TargetID: "regular-flow", Label: "false"}}).Error)
 
 	result, err := processor.Process(ctx, node)
 	require.NoError(t, err)

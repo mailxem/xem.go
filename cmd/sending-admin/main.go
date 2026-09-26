@@ -18,9 +18,9 @@ import (
 func main() {
 	team := flag.String("team", "", "Workspace UUID")
 	action := flag.String("action", "", "approve or suspend")
-	daily := flag.Int64("daily", 200, "Daily recipient limit")
-	monthly := flag.Int64("monthly", 1000, "Monthly recipient limit")
-	budget := flag.Int64("budget-micros", 1000000, "Monthly reserved delivery allowance in micro-USD")
+	daily := flag.Int64("daily", 100, "Daily recipient limit")
+	monthly := flag.Int64("monthly", 3000, "Monthly recipient limit")
+	budget := flag.Int64("budget-micros", 3000000, "Monthly reserved delivery allowance in micro-USD")
 	flag.Parse()
 	if uuid.Validate(*team) != nil || (*action != "approve" && *action != "suspend") || *daily <= 0 || *monthly <= 0 || *budget <= 0 || *daily > 1000000000 || *monthly > 1000000000 || *budget > 1000000000 {
 		log.Fatal("Use -team UUID -action approve|suspend and positive bounded limits")

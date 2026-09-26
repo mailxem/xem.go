@@ -53,13 +53,7 @@ func (p *StartProcessor) Process(ctx *automation.ExecutionContext, node *models.
 		nextNodeIDs[i] = edge.TargetID
 	}
 
-	// Initialize default variables from contact
-	if ctx.Contact != nil {
-		ctx.UpdateVariable("contact_email", ctx.Contact.Email)
-		ctx.UpdateVariable("contact_first_name", ctx.Contact.FirstName)
-		ctx.UpdateVariable("contact_last_name", ctx.Contact.LastName)
-		ctx.UpdateVariable("contact_id", ctx.Contact.ID)
-	}
+	ctx.RefreshContactVariables()
 
 	return &automation.ProcessResult{
 		NextNodeIDs: nextNodeIDs,
