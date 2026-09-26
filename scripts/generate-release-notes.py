@@ -5,7 +5,7 @@ import requests
 def generate_release_notes():
     try:
         data = {
-            "model": "gpt-4o",
+            "model": "nvidia/nemotron-3.5-lightning:free",
             "messages": [
                 {
                     "role": "system", 
@@ -37,7 +37,7 @@ def generate_release_notes():
         }
 
         response = requests.post(
-            url=os.environ.get("OPENAPI_BASE_URL"),
+            url=os.environ.get("OPENROUTER_BASE_URL") + "/chat/completions",
             headers={
                 "Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY')}",
                 "Content-Type": "application/json",
