@@ -281,7 +281,7 @@ func (e *Engine) getOrCreateExecution(ctx context.Context, automationID, contact
 		Status:        models.ExecutionStatusRunning,
 		CurrentNodeID: currentNodeID,
 		ExecutionLog:  []byte("[]"),
-		Variables:     []byte("{}"),
+		Variables:     triggerDataJSON,
 		StartedAt:     time.Now(),
 		TriggerType:   "manual",
 		TriggerData:   triggerDataJSON,
@@ -302,7 +302,7 @@ func (e *Engine) buildExecutionContext(execution *models.AutomationExecution, co
 	var executionLog []LogEntry
 	json.Unmarshal(execution.ExecutionLog, &executionLog)
 
-	return &ExecutionContext{
+	execCtx := &ExecutionContext{
 		AutomationID: execution.AutomationID,
 		ContactID:    execution.ContactID,
 		TeamID:       automation.TeamID,
@@ -311,6 +311,8 @@ func (e *Engine) buildExecutionContext(execution *models.AutomationExecution, co
 		Contact:      contact,
 		Execution:    execution,
 	}
+	execCtx.RefreshContactVariables()
+	return execCtx
 }
 
 // saveExecution persists the execution state

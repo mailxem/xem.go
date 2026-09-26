@@ -19,14 +19,14 @@ type ExecutionContext struct {
 
 // LogEntry represents a single node execution in the log
 type LogEntry struct {
-	NodeID      string                 `json:"nodeId"`
-	NodeType    models.NodeType        `json:"nodeType"`
-	Timestamp   time.Time              `json:"timestamp"`
-	Status      string                 `json:"status"` // success, failed, skipped
-	Message     string                 `json:"message"`
-	Data        map[string]interface{} `json:"data,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	DurationMs  int64                  `json:"durationMs"`
+	NodeID     string                 `json:"nodeId"`
+	NodeType   models.NodeType        `json:"nodeType"`
+	Timestamp  time.Time              `json:"timestamp"`
+	Status     string                 `json:"status"` // success, failed, skipped
+	Message    string                 `json:"message"`
+	Data       map[string]interface{} `json:"data,omitempty"`
+	Error      string                 `json:"error,omitempty"`
+	DurationMs int64                  `json:"durationMs"`
 }
 
 // AddLog adds an entry to the execution log
@@ -72,4 +72,17 @@ func NewExecutionContext(automationID, contactID, teamID string, triggerData map
 		Variables:    triggerData,
 		ExecutionLog: []LogEntry{},
 	}
+}
+
+// RefreshContactVariables makes profile changes visible to later rules and resumes.
+func (ctx *ExecutionContext) RefreshContactVariables() {
+	if ctx.Contact == nil {
+		return
+	}
+	c := ctx.Contact
+	fields := map[string]string{"email": c.Email, "first_name": c.FirstName, "last_name": c.LastName, "company": c.Company, "country": c.Country, "city": c.City, "state": c.State, "zip": c.Zip, "address": c.Address, "phone": c.Phone, "linkedin": c.LinkedIn, "twitter": c.Twitter, "facebook": c.Facebook, "instagram": c.Instagram, "id": c.ID}
+	for key, value := range fields {
+		ctx.UpdateVariable("contact_"+key, value)
+	}
+	ctx.UpdateVariable("current_list_id", c.ListID)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"kori/internal/automation"
 	"kori/internal/models"
+	"kori/internal/workflowconfig"
 	"time"
 
 	"gorm.io/gorm"
@@ -16,9 +17,7 @@ type WaitProcessor struct {
 }
 
 // WaitNodeData represents the data structure for WAIT nodes
-type WaitNodeData struct {
-	Duration string `json:"duration"` // e.g., "5m", "1h", "30s"
-}
+type WaitNodeData = workflowconfig.Wait
 
 // NewWaitProcessor creates a new WAIT node processor
 func NewWaitProcessor(db *gorm.DB) *WaitProcessor {
@@ -36,32 +35,21 @@ func (p *WaitProcessor) Validate(node *models.AutomationNode) error {
 		return fmt.Errorf("invalid node type for WaitProcessor")
 	}
 
-	var data WaitNodeData
-	if err := json.Unmarshal(node.Data, &data); err != nil {
-		return fmt.Errorf("invalid wait node data: %w", err)
-	}
-
-	// Validate duration format
-	if data.Duration == "" {
-		return fmt.Errorf("duration is required")
-	}
-
-	if _, err := time.ParseDuration(data.Duration); err != nil {
-		return fmt.Errorf("invalid duration format: %w", err)
-	}
-
-	return nil
+	return workflowconfig.Validate("WAIT", node.Data)
 }
 
 // Process executes the WAIT node logic
 func (p *WaitProcessor) Process(ctx *automation.ExecutionContext, node *models.AutomationNode) (*automation.ProcessResult, error) {
+	if err := p.Validate(node); err != nil {
+		return nil, err
+	}
 	var data WaitNodeData
 	if err := json.Unmarshal(node.Data, &data); err != nil {
 		return nil, fmt.Errorf("failed to parse wait node data: %w", err)
 	}
 
 	// Parse duration
-	duration, err := time.ParseDuration(data.Duration)
+	duration, err := workflowconfig.WaitDuration(data, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse duration: %w", err)
 	}
@@ -72,11 +60,8 @@ func (p *WaitProcessor) Process(ctx *automation.ExecutionContext, node *models.A
 		return nil, fmt.Errorf("failed to load edges: %w", err)
 	}
 
-	if len(edges) == 0 {
-		return &automation.ProcessResult{
-			Complete: true,
-			Message:  fmt.Sprintf("WAIT node has no outgoing edges, workflow paused for %s", data.Duration),
-		}, nil
+	if len(edges) != 1 {
+		return nil, fmt.Errorf("wait step needs one continuation")
 	}
 
 	nextNodeIDs := make([]string, len(edges))
@@ -88,10 +73,10 @@ func (p *WaitProcessor) Process(ctx *automation.ExecutionContext, node *models.A
 	return &automation.ProcessResult{
 		NextNodeIDs: nextNodeIDs,
 		Wait:        &duration,
-		Message:     fmt.Sprintf("Waiting for %s before continuing", data.Duration),
+		Message:     fmt.Sprintf("Waiting for %s before continuing", duration),
 		Data: map[string]interface{}{
-			"duration":   data.Duration,
-			"resumeAt":   time.Now().Add(duration).Format(time.RFC3339),
+			"duration": data.Duration,
+			"resumeAt": time.Now().Add(duration).Format(time.RFC3339),
 		},
 	}, nil
 }

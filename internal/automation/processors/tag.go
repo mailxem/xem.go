@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"kori/internal/automation"
 	"kori/internal/models"
+	"kori/internal/workflowconfig"
 
 	"gorm.io/gorm"
 )
@@ -36,24 +37,17 @@ func (p *TagProcessor) Validate(node *models.AutomationNode) error {
 		return fmt.Errorf("invalid node type for TagProcessor")
 	}
 
-	var data TagNodeData
-	if err := json.Unmarshal(node.Data, &data); err != nil {
-		return fmt.Errorf("invalid tag node data: %w", err)
-	}
-
-	if data.Action != "add" && data.Action != "remove" {
-		return fmt.Errorf("action must be 'add' or 'remove'")
-	}
-
-	if len(data.Tags) == 0 {
-		return fmt.Errorf("at least one tag is required")
-	}
-
-	return nil
+	return workflowconfig.Validate("TAG", node.Data)
 }
 
 // Process executes the TAG node logic
 func (p *TagProcessor) Process(ctx *automation.ExecutionContext, node *models.AutomationNode) (*automation.ProcessResult, error) {
+	if err := p.Validate(node); err != nil {
+		return nil, err
+	}
+	if ctx.Contact == nil || ctx.Contact.TeamID != ctx.TeamID {
+		return nil, fmt.Errorf("contact is outside workspace")
+	}
 	var data TagNodeData
 	if err := json.Unmarshal(node.Data, &data); err != nil {
 		return nil, fmt.Errorf("failed to parse tag node data: %w", err)

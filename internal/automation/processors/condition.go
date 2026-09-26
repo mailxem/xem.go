@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"kori/internal/automation"
 	"kori/internal/models"
+	"kori/internal/workflowconfig"
 	"strconv"
 	"strings"
 
@@ -46,44 +47,14 @@ func (p *ConditionProcessor) Validate(node *models.AutomationNode) error {
 		return fmt.Errorf("invalid node type for ConditionProcessor")
 	}
 
-	var data ConditionNodeData
-	if err := json.Unmarshal(node.Data, &data); err != nil {
-		return fmt.Errorf("invalid condition node data: %w", err)
-	}
-
-	if len(data.Conditions) == 0 {
-		return fmt.Errorf("at least one condition is required")
-	}
-
-	if data.Operator != "" && data.Operator != "AND" && data.Operator != "OR" {
-		return fmt.Errorf("operator must be 'AND' or 'OR'")
-	}
-
-	for i, cond := range data.Conditions {
-		if cond.Variable == "" {
-			return fmt.Errorf("condition %d: variable is required", i)
-		}
-		if cond.Operator == "" {
-			return fmt.Errorf("condition %d: operator is required", i)
-		}
-		validOps := []string{"==", "!=", ">", "<", ">=", "<=", "contains", "exists", "not_exists"}
-		valid := false
-		for _, op := range validOps {
-			if cond.Operator == op {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("condition %d: invalid operator '%s'", i, cond.Operator)
-		}
-	}
-
-	return nil
+	return workflowconfig.Validate("CONDITION", node.Data)
 }
 
 // Process executes the CONDITION node logic
 func (p *ConditionProcessor) Process(ctx *automation.ExecutionContext, node *models.AutomationNode) (*automation.ProcessResult, error) {
+	if err := p.Validate(node); err != nil {
+		return nil, err
+	}
 	var data ConditionNodeData
 	if err := json.Unmarshal(node.Data, &data); err != nil {
 		return nil, fmt.Errorf("failed to parse condition node data: %w", err)
@@ -125,44 +96,26 @@ func (p *ConditionProcessor) Process(ctx *automation.ExecutionContext, node *mod
 		branchKey = "true"
 	}
 
-	// Check if branch exists in data
-	if data.Branches != nil && data.Branches[branchKey] != "" {
-		nextNodeID = data.Branches[branchKey]
-	} else {
-		// Fall back to edges with labels
-		var edges []models.AutomationNodeEdge
-		if err := p.db.Where("automation_id = ? AND source_id = ?", ctx.AutomationID, node.ID).Find(&edges).Error; err != nil {
-			return nil, fmt.Errorf("failed to load edges: %w", err)
-		}
-
-		// Look for edge with matching label
-		for _, edge := range edges {
-			if strings.EqualFold(edge.Label, branchKey) {
-				nextNodeID = edge.TargetID
-				break
-			}
-		}
-
-		// If no labeled edge found, use first edge
-		if nextNodeID == "" && len(edges) > 0 {
-			nextNodeID = edges[0].TargetID
+	var edges []models.AutomationNodeEdge
+	if err := p.db.Where("automation_id = ? AND source_id = ?", ctx.AutomationID, node.ID).Find(&edges).Error; err != nil {
+		return nil, err
+	}
+	for _, edge := range edges {
+		if edge.Label == branchKey {
+			nextNodeID = edge.TargetID
 		}
 	}
-
 	if nextNodeID == "" {
-		return &automation.ProcessResult{
-			Complete: true,
-			Message:  fmt.Sprintf("Condition evaluated to %v, no next node found", finalResult),
-		}, nil
+		return nil, fmt.Errorf("missing %s branch", branchKey)
 	}
 
 	return &automation.ProcessResult{
 		NextNodeIDs: []string{nextNodeID},
 		Message:     fmt.Sprintf("Condition evaluated to %v, routing to branch '%s'", finalResult, branchKey),
 		Data: map[string]interface{}{
-			"result":       finalResult,
-			"branch":       branchKey,
-			"evaluations":  results,
+			"result":      finalResult,
+			"branch":      branchKey,
+			"evaluations": results,
 		},
 	}, nil
 }
@@ -178,6 +131,13 @@ func (p *ConditionProcessor) evaluateCondition(cond Condition, ctx *automation.E
 	}
 	if cond.Operator == "not_exists" {
 		return !exists, nil
+	}
+
+	if cond.Operator == "empty" {
+		return !exists || varValue == nil || strings.TrimSpace(fmt.Sprint(varValue)) == "", nil
+	}
+	if cond.Operator == "not_empty" {
+		return exists && varValue != nil && strings.TrimSpace(fmt.Sprint(varValue)) != "", nil
 	}
 
 	// For other operators, variable must exist
@@ -199,6 +159,12 @@ func (p *ConditionProcessor) evaluateCondition(cond Condition, ctx *automation.E
 	case "contains":
 		return strings.Contains(strings.ToLower(varStr), strings.ToLower(condValue)), nil
 
+	case "not_contains":
+		return !strings.Contains(strings.ToLower(varStr), strings.ToLower(condValue)), nil
+	case "starts_with":
+		return strings.HasPrefix(strings.ToLower(varStr), strings.ToLower(condValue)), nil
+	case "ends_with":
+		return strings.HasSuffix(strings.ToLower(varStr), strings.ToLower(condValue)), nil
 	case ">", "<", ">=", "<=":
 		// Try numeric comparison first
 		varNum, varErr := strconv.ParseFloat(varStr, 64)

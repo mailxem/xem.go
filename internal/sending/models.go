@@ -107,7 +107,10 @@ type Suppression struct {
 func (Suppression) TableName() string { return "managed_suppressions" }
 
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(&Account{}, &Domain{}, &Credential{}, &Message{}, &Event{}, &Suppression{}, &Audit{})
+	if err := db.AutoMigrate(&Account{}, &Domain{}, &Credential{}, &Message{}, &Event{}, &Suppression{}, &Audit{}); err != nil {
+		return err
+	}
+	return upgradeStarterAllowance(db)
 }
 
 type Audit struct {

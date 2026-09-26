@@ -28,7 +28,7 @@ func LoadConfig() (Config, error) {
 		k   string
 		dst *int64
 		def int64
-	}{{"MANAGED_MAX_MESSAGE_BYTES", &c.MaxBytes, 5 * 1024 * 1024}, {"MANAGED_DAILY_LIMIT", &c.DailyLimit, 200}, {"MANAGED_MONTHLY_LIMIT", &c.MonthlyLimit, 1000}, {"MANAGED_MONTHLY_BUDGET_MICROS", &c.BudgetMicros, 1000000}, {"MANAGED_COST_PER_RECIPIENT_MICROS", &c.CostMicros, 1000}, {"MANAGED_QUEUE_LIMIT", &c.QueueLimit, 1000}}
+	}{{"MANAGED_MAX_MESSAGE_BYTES", &c.MaxBytes, 5 * 1024 * 1024}, {"MANAGED_DAILY_LIMIT", &c.DailyLimit, autoApprovalDailyLimit}, {"MANAGED_MONTHLY_LIMIT", &c.MonthlyLimit, autoApprovalMonthlyLimit}, {"MANAGED_MONTHLY_BUDGET_MICROS", &c.BudgetMicros, autoApprovalBudgetMicros}, {"MANAGED_COST_PER_RECIPIENT_MICROS", &c.CostMicros, 1000}, {"MANAGED_QUEUE_LIMIT", &c.QueueLimit, 1000}}
 	for _, v := range values {
 		*v.dst = v.def
 		if raw := os.Getenv(v.k); raw != "" {

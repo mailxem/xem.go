@@ -28,9 +28,9 @@ import (
 // Starter ceilings apply only to automatic approval. Operators can review and
 // raise limits separately; a DNS recheck never increases an existing allowance.
 const (
-	autoApprovalDailyLimit   int64 = 50
-	autoApprovalMonthlyLimit int64 = 200
-	autoApprovalBudgetMicros int64 = 200000
+	autoApprovalDailyLimit   int64 = 100
+	autoApprovalMonthlyLimit int64 = 3000
+	autoApprovalBudgetMicros int64 = 3000000
 )
 
 var ErrDenied = errors.New("sending is unavailable: check approval, pause status, domain readiness, and credential")

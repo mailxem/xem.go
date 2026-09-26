@@ -8,8 +8,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"kori/internal/models"
+	"kori/internal/workflowconfig"
 	"strings"
-	"time"
 )
 
 func (s *AutomationService) SaveGraph(ctx context.Context, a *models.Automation) error {
@@ -124,10 +124,10 @@ func (s *AutomationService) ValidateConfiguration(a *models.Automation) error {
 		if n.Type == models.NodeTypeExit && len(outgoing[n.ID]) != 0 {
 			return fmt.Errorf("finish steps cannot have outgoing connections")
 		}
-		if n.Type != models.NodeTypeExit && n.Type != models.NodeTypeCondition && len(outgoing[n.ID]) != 1 {
+		if n.Type != models.NodeTypeExit && n.Type != models.NodeTypeCondition && n.Type != "PERCENTAGE_SPLIT" && len(outgoing[n.ID]) != 1 {
 			return fmt.Errorf("each step must have exactly one continuation; use a condition to branch")
 		}
-		if n.Type == models.NodeTypeCondition && len(outgoing[n.ID]) != 2 {
+		if (n.Type == models.NodeTypeCondition || n.Type == "PERCENTAGE_SPLIT") && len(outgoing[n.ID]) != 2 {
 			return fmt.Errorf("conditions require exactly two paths")
 		}
 
@@ -164,27 +164,19 @@ func (s *AutomationService) ValidateConfiguration(a *models.Automation) error {
 			if subject, _ := data["subject"].(string); len(subject) > 200 || strings.ContainsAny(subject, "\r\n") {
 				return fmt.Errorf("invalid email subject")
 			}
-		case models.NodeTypeWait:
-			raw, _ := data["duration"].(string)
-			d, err := time.ParseDuration(raw)
-			if err != nil || d <= 0 || d > 365*24*time.Hour {
-				return fmt.Errorf("delay must be between one second and 365 days")
+		case models.NodeTypeWait, models.NodeTypeTag, models.NodeTypeUpdateSubscriber, "SET_VARIABLE":
+			if err := workflowconfig.Validate(string(n.Type), n.Data); err != nil {
+				return err
 			}
-		case models.NodeTypeCondition:
-			conditions, ok := data["conditions"].([]interface{})
-			if !ok || len(conditions) == 0 {
-				return fmt.Errorf("condition needs a rule")
+		case models.NodeTypeAddToList:
+			listID, _ := data["listId"].(string)
+			var count int64
+			if uuid.Validate(listID) != nil || s.db.Model(&models.MailingList{}).Where("id = ? AND team_id = ? AND is_deleted = ?", listID, a.TeamID, false).Count(&count).Error != nil || count != 1 {
+				return fmt.Errorf("choose a list in this workspace")
 			}
-			for _, raw := range conditions {
-				condition, ok := raw.(map[string]interface{})
-				if !ok || condition["variable"] == "" {
-					return fmt.Errorf("condition needs a variable")
-				}
-				switch condition["operator"] {
-				case "==", "!=", ">", "<", ">=", "<=", "contains", "exists", "not_exists":
-				default:
-					return fmt.Errorf("invalid condition operator")
-				}
+		case models.NodeTypeCondition, "PERCENTAGE_SPLIT":
+			if err := workflowconfig.Validate(string(n.Type), n.Data); err != nil {
+				return err
 			}
 			labels := map[string]bool{}
 			for _, edge := range a.Edges {
@@ -192,8 +184,12 @@ func (s *AutomationService) ValidateConfiguration(a *models.Automation) error {
 					labels[edge.Label] = true
 				}
 			}
-			if !labels["true"] || !labels["false"] {
-				return fmt.Errorf("condition needs true and false paths")
+			left, right := "true", "false"
+			if n.Type == "PERCENTAGE_SPLIT" {
+				left, right = "A", "B"
+			}
+			if !labels[left] || !labels[right] {
+				return fmt.Errorf("branch needs %s and %s paths", left, right)
 			}
 			if branches, ok := data["branches"].(map[string]interface{}); ok && len(branches) > 0 {
 				return fmt.Errorf("use graph edges for condition paths")

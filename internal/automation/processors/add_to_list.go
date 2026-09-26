@@ -7,6 +7,7 @@ import (
 	"kori/internal/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // AddToListProcessor handles ADD_TO_LIST nodes
@@ -54,47 +55,47 @@ func (p *AddToListProcessor) Process(ctx *automation.ExecutionContext, node *mod
 		return nil, fmt.Errorf("failed to parse add_to_list node data: %w", err)
 	}
 
-	// Verify the list exists and belongs to the same team
+	if err := p.Validate(node); err != nil {
+		return nil, err
+	}
 	var list models.MailingList
-	if err := p.db.Where("id = ? AND team_id = ?", data.ListID, ctx.TeamID).First(&list).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, fmt.Errorf("mailing list not found or access denied")
+	if err := p.db.Transaction(func(tx *gorm.DB) error {
+		var contact models.Contact
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND team_id = ? AND is_deleted = ?", ctx.ContactID, ctx.TeamID, false).First(&contact).Error; err != nil {
+			return err
 		}
-		return nil, fmt.Errorf("failed to load mailing list: %w", err)
-	}
-
-	// Check if contact is already in the list
-	if ctx.Contact.ListID == data.ListID {
-		// Contact already in this list, continue
-		var edges []models.AutomationNodeEdge
-		if err := p.db.Where("automation_id = ? AND source_id = ?", ctx.AutomationID, node.ID).Find(&edges).Error; err != nil {
-			return nil, fmt.Errorf("failed to load edges: %w", err)
+		// Lock affected lists in ID order so opposite moves cannot deadlock.
+		var lists []models.MailingList
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ? AND team_id = ? AND is_deleted = ?", []string{contact.ListID, data.ListID}, ctx.TeamID, false).Order("id").Find(&lists).Error; err != nil {
+			return err
+		}
+		for _, candidate := range lists {
+			if candidate.ID == data.ListID {
+				list = candidate
+			}
+		}
+		if list.ID == "" {
+			return fmt.Errorf("mailing list not found or access denied")
+		}
+		if contact.ListID == list.ID {
+			ctx.Contact = &contact
+			return nil
+		}
+		previous := contact.ListID
+		if err := tx.Model(&contact).Update("list_id", list.ID).Error; err != nil {
+			return err
+		}
+		if err := models.SyncSubscribersCountByID(tx, previous); err != nil {
+			return err
+		}
+		if err := models.SyncSubscribersCountByID(tx, list.ID); err != nil {
+			return err
 		}
 
-		nextNodeIDs := make([]string, len(edges))
-		for i, edge := range edges {
-			nextNodeIDs[i] = edge.TargetID
-		}
-
-		return &automation.ProcessResult{
-			NextNodeIDs: nextNodeIDs,
-			Message:     fmt.Sprintf("Contact already in list '%s'", list.Name),
-			Data: map[string]interface{}{
-				"listId":   list.ID,
-				"listName": list.Name,
-				"skipped":  true,
-			},
-		}, nil
-	}
-
-	// Update contact's list
-	if err := p.db.Model(ctx.Contact).Update("list_id", data.ListID).Error; err != nil {
-		return nil, fmt.Errorf("failed to add contact to list: %w", err)
-	}
-
-	// Update list subscriber count
-	if err := p.db.Model(&list).Update("subscribers_count", gorm.Expr("subscribers_count + ?", 1)).Error; err != nil {
-		return nil, fmt.Errorf("failed to update list count: %w", err)
+		ctx.Contact = &contact
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	// Get next nodes
@@ -110,7 +111,7 @@ func (p *AddToListProcessor) Process(ctx *automation.ExecutionContext, node *mod
 
 	return &automation.ProcessResult{
 		NextNodeIDs: nextNodeIDs,
-		Message:     fmt.Sprintf("Added contact to list '%s'", list.Name),
+		Message:     fmt.Sprintf("Moved contact to list '%s'", list.Name),
 		UpdateVars: map[string]interface{}{
 			"current_list_id":   data.ListID,
 			"current_list_name": list.Name,

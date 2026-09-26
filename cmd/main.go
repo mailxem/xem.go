@@ -173,6 +173,8 @@ func main() {
 	automationEngine.RegisterProcessor(processors.NewConditionProcessor(db_instance))
 	automationEngine.RegisterProcessor(processors.NewAddToListProcessor(db_instance))
 	automationEngine.RegisterProcessor(processors.NewTagProcessor(db_instance))
+	automationEngine.RegisterProcessor(processors.NewPercentageSplitProcessor(db_instance))
+	automationEngine.RegisterProcessor(processors.NewSetVariableProcessor(db_instance))
 	automationEngine.RegisterProcessor(processors.NewWebhookProcessor(db_instance))
 	automationEngine.RegisterProcessor(processors.NewUpdateSubscriberProcessor(db_instance))
 
